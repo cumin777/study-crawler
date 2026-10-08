@@ -91,6 +91,40 @@ forum 的选择器示例：
 - 手动：`python -m studycrawler crawl` 或 `python -m studycrawler crawl 来源名`
 - 定时增量：`python -m studycrawler watch`（间隔在 `watch_interval_min` 配）。挂在后台即可；Windows 开机自启可用任务计划程序，操作为 `python -m studycrawler watch`，起始于本项目目录。
 
+## 关键词输入模型（日常主力）
+
+三要素：**关键词 / 存储路径 / 文件数**。
+
+一次性：
+
+    python -m studycrawler hunt "板绘 笔刷" --files 20 --out "D:/收集"
+
+常驻（最常用）：
+
+    python -m studycrawler watch --files 20 --out "D:/收集"
+
+watch 每轮做两件事：跑 config 里的 sources，然后读**关键词文件**（默认项目根目录 `keywords.txt`，可用 `--keywords` 换路径）：
+
+```
+# 一行一个关键词，可含空格短语，# 注释
+板绘
+笔刷
+```
+
+新关键词自动 hunt 一次（`--files` 个文件、落到 `--out`），SQLite 记录已处理的词不会重复；往文件里加一行就是排一个新任务——外部脚本/hook 往里写关键词即可触发采集。想让全部关键词重抓，删 `data/state.db`。
+
+`watch --once` 只跑一轮就退出（适合配合外部定时器）。
+
+## 双击脚本（Windows）
+
+项目根目录三个 bat，双击即用：
+
+- `找资料.bat` —— 问你三件事（关键词/存储路径/文件数），立即 hunt
+- `抓一轮.bat` —— 跑一次 crawl（全部启用的源）
+- `常驻监控.bat` —— 启动 watch（含关键词文件监控）
+
+bat 内容是纯 ASCII（避免 cmd 编码坑），交互提示为英文，参数含义同上表。
+
 去重靠 SQLite（`data/state.db`）：同一 URL 成功处理过就跳过，失败的下轮自动重试。删掉 state.db 就是全量重抓。
 
 ## 两台电脑之间迁移（公司试跑 -> 个人机部署）

@@ -135,6 +135,30 @@ def test_hunt_parsers() -> None:
     print("ok  hunt.parsers")
 
 
+def test_keywords_queue() -> None:
+    from studycrawler.hunt import mark_query_done, query_done, read_keywords
+
+    with tempfile.TemporaryDirectory() as td:
+        kf = Path(td) / "keywords.txt"
+        kf.write_text("# 注释\n板绘\n\n笔刷 教程\n", encoding="utf-8")
+        assert read_keywords(kf) == ["板绘", "笔刷 教程"]
+        assert read_keywords(Path(td) / "不存在.txt") == []
+
+        db = StateDB(Path(td) / "s.db")
+
+        class FakeApp:
+            pass
+
+        app = FakeApp()
+        app.db = db
+        assert not query_done(app, "板绘")
+        mark_query_done(app, "板绘")
+        assert query_done(app, "板绘")
+        assert not query_done(app, "笔刷 教程")
+        db.close()
+    print("ok  hunt.keywords queue")
+
+
 def test_online() -> None:
     from studycrawler.fetch import Fetcher
 
@@ -153,6 +177,7 @@ def main() -> None:
     test_db()
     test_category_dir()
     test_hunt_parsers()
+    test_keywords_queue()
     if "--online" in sys.argv:
         test_online()
     print("\n全部通过")

@@ -31,6 +31,7 @@ FILE_EXTS = {
     ".mp3", ".flac", ".wav", ".ape",
     ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
     ".jpg", ".png", ".jpeg", ".webp",
+    ".abr", ".psd", ".svg",  # 笔刷/素材包
 }
 
 

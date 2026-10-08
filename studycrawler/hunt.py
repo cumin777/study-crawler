@@ -48,6 +48,31 @@ def suggest_type(url: str) -> str:
     return "forum"
 
 
+# ---------- 关键词队列（watch 模式用） ----------
+
+KEYWORD_SOURCE = "__keywords__"
+
+
+def read_keywords(path) -> list[str]:
+    """关键词文件：一行一个关键词（可含空格短语），# 开头是注释。"""
+    path = Path(path)
+    if not path.exists():
+        return []
+    return [
+        ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+
+
+def query_done(app, query: str) -> bool:
+    """这个关键词是否已经被 hunt 处理过（搜索成功即算）。"""
+    return app.db.seen(f"query:{query}", KEYWORD_SOURCE)
+
+
+def mark_query_done(app, query: str) -> None:
+    app.db.mark(f"query:{query}", KEYWORD_SOURCE, title=query, status="done")
+
+
 # ---------- 搜索源 ----------
 
 def _hits_from_selectors(html, base_url, item_sel, link_sel, title_sel=""):
@@ -157,7 +182,15 @@ class Hunt:
         host = urlparse(url).netloc.lower()
         return any(b in host for b in self.h.blocklist)
 
-    def run(self, query: str, pages: int = 2, top: int = 0) -> tuple[Path, list[dict]]:
+    def run(
+        self,
+        query: str,
+        pages: int = 2,
+        top: int = 0,
+        files_cap: int = 0,
+        out: str | None = None,
+    ) -> tuple[Path, list[dict]]:
+        """files_cap: 本次最多下载的文件数；out: 指定输出目录（默认 sync_dir/_hunt）。"""
         top = top or self.h.max_sites
         terms = [t.lower() for t in query.split() if t.strip()]
         log.info("hunt 启动: 关键词=%r, 引擎=%s", query, self.h.engines)
@@ -196,11 +229,26 @@ class Hunt:
                 results.append(r)
         results.sort(key=lambda r: r["score"], reverse=True)
 
-        # 3) 收割
-        harvest_dir, pan_index, n_files, n_pans = self._harvest(query, results)
+        # 关键词本轮已处理（搜索成功即算，即使没收到东西）；搜索全挂则下轮重试
+        if candidates:
+            mark_query_done(self.app, query)
 
-        # 4) 报告
-        report = self._report(query, results, harvest_dir, n_files, n_pans)
+        # 3) 收割 + 4) 报告。out 指定时整套结果落在 out 下，否则在 sync_dir/_hunt
+        base = Path(out).expanduser().resolve() if out else None
+        qdir = safe_filename(query)
+        if base:
+            cat = base / qdir
+            cat.mkdir(parents=True, exist_ok=True)
+        else:
+            cat = category_dir(self.app.cfg.settings, f"_hunt/{qdir}")
+        n_files, n_pans, pan_index = self._harvest(query, results, cat, files_cap)
+
+        stamp = datetime.now().strftime("%Y-%m-%d")
+        if base:
+            report = base / f"{qdir}-{stamp}.md"
+        else:
+            report = category_dir(self.app.cfg.settings, "_hunt") / f"{qdir}-{stamp}.md"
+        self._report(report, query, results, cat, n_files, n_pans)
         log.info("报告已写入 %s", report)
         return report, results
 
@@ -228,18 +276,23 @@ class Hunt:
             "suggest": suggest_type(final_url),
         }
 
-    def _harvest(self, query, results):
-        settings = self.app.cfg.settings
-        cat = category_dir(settings, f"_hunt/{safe_filename(query)}")
+    def _harvest(self, query, results, cat: Path, files_cap: int = 0):
+        """限量收割：files_cap 是本次总下载上限，per-site 上限取配置。"""
         pan_index = cat / "分享链接.md"
         src_name = f"hunt:{query}"
         n_files = n_pans = 0
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         for r in results:
+            if files_cap and n_files >= files_cap:
+                break
             if r["kw"] < HARVEST_MIN_KW or r["score"] < HARVEST_MIN_SCORE:
                 continue
-            for url in r["files"][: self.h.max_files_per_site]:
+            for url in r["files"]:
+                if files_cap and n_files >= files_cap:
+                    break
+                if self.app.db.seen(url, src_name):
+                    continue
                 try:
                     self.app.fetcher.download(url, cat, fallback_stem=Path(urlparse(url).path).stem)
                     self.app.db.mark(url, src_name, title=r["title"], status="done")
@@ -258,12 +311,13 @@ class Hunt:
                         f.write(f"- {now} | {r['title']} | {p['link']}{code}\n")
                         self.app.db.mark(p["link"], src_name, title=r["title"], status="done")
                         n_pans += 1
-        return cat, pan_index, n_files, n_pans
+        hit_cap = files_cap and n_files >= files_cap
+        log.info("[%s] 收割文件 %d 个%s", query, n_files,
+                 f"（已达上限 {files_cap}）" if hit_cap else "")
+        return n_files, n_pans, pan_index
 
-    def _report(self, query, results, harvest_dir, n_files, n_pans) -> Path:
-        settings = self.app.cfg.settings
+    def _report(self, report: Path, query, results, harvest_dir, n_files, n_pans) -> Path:
         stamp = datetime.now().strftime("%Y-%m-%d")
-        report = category_dir(settings, "_hunt") / f"{safe_filename(query)}-{stamp}.md"
         lines = [
             f"# hunt 报告: {query}",
             f"日期: {stamp}  引擎: {', '.join(self.h.engines)}  候选: {len(results)} 站",

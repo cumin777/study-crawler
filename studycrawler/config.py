@@ -50,6 +50,7 @@ class HuntSettings:
 
     engines: list[str] = field(default_factory=lambda: ["bing", "baidu"])
     custom_engines: list[dict] = field(default_factory=list)  # 任意搜索源
+    keywords_file: str = "./keywords.txt"  # watch 模式每轮读取的关键词文件
     max_sites: int = 10           # 每次最多探测的站点数
     max_files_per_site: int = 5   # 每站最多直接下载的文件数
     blocklist: list[str] = field(default_factory=lambda: [
@@ -111,6 +112,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     hunt = HuntSettings(
         engines=list(h.get("engines", ["bing", "baidu"])),
         custom_engines=[dict(e) for e in h.get("engine", [])],
+        keywords_file=str(h.get("keywords_file", "./keywords.txt")),
         max_sites=int(h.get("max_sites", 10)),
         max_files_per_site=int(h.get("max_files_per_site", 5)),
         blocklist=list(h.get("blocklist", HuntSettings().blocklist)),
@@ -140,6 +142,8 @@ timeout = 20
 [hunt]
 # 用哪些搜索引擎（bing / baidu / ddg）
 engines = ["bing", "baidu"]
+# watch 模式每轮读取的关键词文件（一行一个关键词，# 注释；新关键词自动 hunt 一次）
+keywords_file = "./keywords.txt"
 # 每次最多探测的站点数
 max_sites = 10
 # 每站最多直接下载的文件数（防失控）
