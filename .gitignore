@@ -1,0 +1,11 @@
+# 个人配置（含私人路径和来源），不进仓库
+config.toml
+
+# 运行数据：下载的文件、状态库、日志
+data/
+
+__pycache__/
+*.pyc
+.venv/
+.idea/
+.vscode/

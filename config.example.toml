@@ -1,0 +1,51 @@
+# 配置模板：复制为 config.toml 后编辑（config.toml 不进 git）
+# 带 xxx 的地方都需要按实际情况修改
+
+[settings]
+# 网盘客户端的同步目录。爬虫下载到这里，客户端负责自动上传。
+# 个人电脑上改成真实同步目录，例如 "D:/BaiduSync/学习资料"
+sync_dir = "./data/sync"
+# 去重状态库位置
+db_path = "./data/state.db"
+# 对同一站点的请求间隔秒数（别调太小，对站点礼貌一点）
+request_delay = 2.0
+# watch 模式轮询间隔（分钟）
+watch_interval_min = 30
+# HTTP 超时（秒）
+timeout = 20
+
+# ---------- 来源示例（四类各一个，全部 enabled=false，改好再开） ----------
+
+[[source]]
+name = "示例-论坛"
+type = "forum"
+url = "https://example.com/list"
+category = "电子书"        # 同步目录下的子文件夹名
+enabled = false
+follow_detail = true       # 进入帖子详情页找附件
+max_items = 30
+[source.selectors]         # 打开列表页 F12 看结构后填写
+item = "div.post"          # 每个条目的容器
+title = "h3 a"             # 标题（相对条目，可省略）
+link = "h3 a"              # 链接（相对条目，必填）
+
+[[source]]
+name = "示例-链接站"
+type = "linkhub"
+url = "https://example.com/pan"
+category = "_links"
+enabled = false
+
+[[source]]
+name = "示例-图包"
+type = "gallery"
+url = "https://example.com/album/123"
+category = "图包"
+enabled = false
+
+[[source]]
+name = "示例-课程"
+type = "video"
+url = "https://example.com/course/1"
+category = "课程"
+enabled = false
