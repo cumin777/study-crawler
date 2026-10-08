@@ -159,6 +159,20 @@ def test_keywords_queue() -> None:
     print("ok  hunt.keywords queue")
 
 
+def test_strong_first() -> None:
+    from studycrawler.hunt import _strong_first
+
+    urls = [
+        "https://x.com/a.jpg", "https://x.com/brush.zip",
+        "https://x.com/pic.png", "https://x.com/book.pdf",
+    ]
+    ordered = _strong_first(urls)
+    assert ordered[0].endswith(("brush.zip", "book.pdf")), ordered
+    assert ordered[-1].endswith((".jpg", ".png")), ordered
+    assert len(ordered) == 4
+    print("ok  hunt.strong_first")
+
+
 def test_online() -> None:
     from studycrawler.fetch import Fetcher
 
@@ -178,6 +192,7 @@ def main() -> None:
     test_category_dir()
     test_hunt_parsers()
     test_keywords_queue()
+    test_strong_first()
     if "--online" in sys.argv:
         test_online()
     print("\n全部通过")

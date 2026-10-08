@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
@@ -24,13 +26,43 @@ from bs4 import BeautifulSoup
 
 from .engines.forum import file_links_in_page
 from .engines.linkhub import extract_links
-from .storage import category_dir, safe_filename
+from .engines.video import ffmpeg_args
+from .storage import category_dir, count_files, safe_filename
 
 log = logging.getLogger("crawler")
 
 # 收割门槛：关键词至少命中这么多、总分至少这么多才动手下载
 HARVEST_MIN_KW = 1
 HARVEST_MIN_SCORE = 8
+
+# 深挖层数/每站页数上限/最多深挖几个候选
+DEEP_DEPTH = 2
+DEEP_MAX_PAGES = 8
+DEEP_SITES = 3
+
+# 引擎收割限额（hunt 是探路不是搬家，下到样本就停）
+HUNT_VIDEO_LIMIT = 1      # 最多下几个视频
+HUNT_VIDEO_HEIGHT = 480   # 视频分辨率上限
+HUNT_GALLERY_LIMIT = 10   # 图站最多下几张
+
+# 引导深爬的"资源味"链接特征
+DEEP_HINT = re.compile(
+    r"download|resource|free|教程|资源|下载|打包|合集|网盘|素材|提取|盘",
+    re.I,
+)
+
+# 预览图类后缀：收割时排后面，防止拿示例图凑数
+WEAK_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}
+
+
+def _strong_first(urls: list[str]) -> list[str]:
+    """压缩包/笔刷/文档等强类型排前面，预览图排后面。"""
+    strong = [
+        u for u in urls
+        if Path(urlparse(u).path).suffix.lower() not in WEAK_EXTS
+    ]
+    weak = [u for u in urls if u not in strong]
+    return strong + weak
 
 # 已知站点的收录建议
 SUGGEST_TYPES = [
@@ -195,23 +227,27 @@ class Hunt:
         terms = [t.lower() for t in query.split() if t.strip()]
         log.info("hunt 启动: 关键词=%r, 引擎=%s", query, self.h.engines)
 
-        # 1) 搜索，去重 + 每个域名只留一条
+        # 1) 搜索。自动补一个"网盘"意图变体，命中资源页概率更高
+        variants = [query]
+        if not re.search(r"网盘|下载|磁力", query):
+            variants.append(f"{query} 网盘")
         all_hits: dict[str, dict] = {}
         for name in self.h.engines:
             fn = SEARCHERS.get(name)
             if fn is None:
                 log.warning("未知搜索引擎: %s (可选: %s)", name, sorted(SEARCHERS))
                 continue
-            try:
-                got = fn(query, pages, self.app.fetcher)
-            except Exception as exc:
-                log.warning("[%s] 搜索异常: %r", name, exc)
-                continue
-            log.info("[%s] 拿到 %d 条结果", name, len(got))
-            for h in got:
-                domain = urlparse(h["url"]).netloc
-                if domain and domain not in all_hits:
-                    all_hits[domain] = h
+            for q in variants:
+                try:
+                    got = fn(q, pages, self.app.fetcher)
+                except Exception as exc:
+                    log.warning("[%s] 搜索异常: %r", name, exc)
+                    continue
+                log.info("[%s] %r 拿到 %d 条结果", name, q, len(got))
+                for h in got:
+                    domain = urlparse(h["url"]).netloc
+                    if domain and domain not in all_hits:
+                        all_hits[domain] = h
         for eng_cfg in self.h.custom_engines:
             for h in search_custom(eng_cfg, query, pages, self.app.fetcher):
                 domain = urlparse(h["url"]).netloc
@@ -229,6 +265,23 @@ class Hunt:
                 results.append(r)
         results.sort(key=lambda r: r["score"], reverse=True)
 
+        # 2.5) 深挖：对高分候选做有界聚焦爬，把散在内页的文件/网盘链接挖出来。
+        # video/gallery 站不深爬——那是 gallery-dl/yt-dlp 引擎的主场。
+        for r in results[:DEEP_SITES]:
+            if r["suggest"] in ("video", "gallery", "pan"):
+                continue
+            try:
+                pages_seen, files, pans = self._deep_crawl(r["url"], terms)
+            except Exception as exc:
+                log.warning("深挖失败 %s: %r", r["url"], exc)
+                continue
+            have_f = set(r["files"])
+            r["files"] += [f for f in files if f not in have_f]
+            have_p = {p["link"] for p in r["pans"]}
+            r["pans"] += [p for p in pans if p["link"] not in have_p]
+            log.info("深挖 %s (%d 页): +文件 %d, +网盘 %d",
+                     urlparse(r["url"]).netloc, len(pages_seen), len(files), len(pans))
+
         # 关键词本轮已处理（搜索成功即算，即使没收到东西）；搜索全挂则下轮重试
         if candidates:
             mark_query_done(self.app, query)
@@ -242,6 +295,9 @@ class Hunt:
         else:
             cat = category_dir(self.app.cfg.settings, f"_hunt/{qdir}")
         n_files, n_pans, pan_index = self._harvest(query, results, cat, files_cap)
+
+        # 3.5) video/gallery 候选交给现成引擎收割（限量）
+        n_files += self._engine_harvest(query, results, cat, files_cap)
 
         stamp = datetime.now().strftime("%Y-%m-%d")
         if base:
@@ -276,6 +332,112 @@ class Hunt:
             "suggest": suggest_type(final_url),
         }
 
+    def _deep_crawl(self, start_url: str, terms: list[str]):
+        """有界聚焦爬：顺着"资源味"或含关键词的站内链接往深处挖，汇总文件直链和网盘链接。
+
+        层数和总页数都有上限，不会失控。
+        """
+        visited: set[str] = set()
+        files: list[str] = []
+        files_seen: set[str] = set()
+        pans: list[dict] = []
+        pans_seen: set[str] = set()
+        frontier = [(start_url, 0)]
+        host = urlparse(start_url).netloc
+
+        while frontier and len(visited) < DEEP_MAX_PAGES:
+            url, depth = frontier.pop(0)
+            if url in visited:
+                continue
+            visited.add(url)
+            try:
+                resp = self.app.fetcher.get(url)
+            except Exception:
+                continue
+            html = resp.text
+            base = str(resp.url)
+            for f in file_links_in_page(html, base):
+                if f not in files_seen:
+                    files_seen.add(f)
+                    files.append(f)
+            for p in extract_links(html):
+                if p["link"] not in pans_seen:
+                    pans_seen.add(p["link"])
+                    pans.append(p)
+            if depth >= DEEP_DEPTH:
+                continue
+            soup = BeautifulSoup(html, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = urljoin(base, a["href"])
+                p = urlparse(href)
+                if p.netloc != host:
+                    continue
+                if p.path.lower().endswith(
+                    (".css", ".js", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".webp", ".gif")
+                ):
+                    continue
+                text = a.get_text(" ", strip=True)
+                path_l = unquote(p.path).lower()
+                promising = (
+                    DEEP_HINT.search(p.path)
+                    or DEEP_HINT.search(text)
+                    or any(t in text.lower() for t in terms)
+                    or any(t in path_l for t in terms)
+                )
+                if promising and href not in visited:
+                    frontier.append((href, depth + 1))
+        return visited, files, pans
+
+    def _engine_harvest(self, query, results, cat: Path, files_cap: int) -> int:
+        """video/gallery 候选直接调 yt-dlp / gallery-dl 收割，严格限量。
+
+        每种类型只取排名最高的一站—— hunt 要的是样本和入口，不是搬家。
+        """
+        n = 0
+        for r in results:
+            if files_cap and n >= files_cap:
+                break
+            if r["suggest"] == "video":
+                exe = shutil.which("yt-dlp")
+                if not exe:
+                    log.warning("未装 yt-dlp，跳过视频收割: pip install yt-dlp")
+                    break
+                log.info("[引擎收割] yt-dlp <- %s", r["url"])
+                proc = subprocess.run(
+                    [
+                        exe, "-P", str(cat), "-o", "%(title)s [%(id)s].%(ext)s",
+                        "-f", f"bv*[height<={HUNT_VIDEO_HEIGHT}]+ba/b[height<={HUNT_VIDEO_HEIGHT}]",
+                        "--playlist-items", f"1:{HUNT_VIDEO_LIMIT}",
+                        "--retries", "5", *ffmpeg_args(), r["url"],
+                    ],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                )
+                if proc.returncode == 0:
+                    n += HUNT_VIDEO_LIMIT
+                else:
+                    tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+                    log.warning("yt-dlp 失败 %s: %s", r["url"], " | ".join(tail))
+                break
+            if r["suggest"] == "gallery":
+                exe = shutil.which("gallery-dl")
+                if not exe:
+                    log.warning("未装 gallery-dl，跳过图站收割: pip install gallery-dl")
+                    break
+                log.info("[引擎收割] gallery-dl <- %s", r["url"])
+                before = count_files(cat)
+                proc = subprocess.run(
+                    [exe, "--destination", str(cat),
+                     "--range", f"1-{HUNT_GALLERY_LIMIT}", r["url"]],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                )
+                got = max(0, count_files(cat) - before)
+                n += got
+                if proc.returncode != 0:
+                    tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+                    log.warning("gallery-dl 失败 %s: %s", r["url"], " | ".join(tail))
+                break
+        return n
+
     def _harvest(self, query, results, cat: Path, files_cap: int = 0):
         """限量收割：files_cap 是本次总下载上限，per-site 上限取配置。"""
         pan_index = cat / "分享链接.md"
@@ -288,7 +450,7 @@ class Hunt:
                 break
             if r["kw"] < HARVEST_MIN_KW or r["score"] < HARVEST_MIN_SCORE:
                 continue
-            for url in r["files"]:
+            for url in _strong_first(r["files"]):
                 if files_cap and n_files >= files_cap:
                     break
                 if self.app.db.seen(url, src_name):

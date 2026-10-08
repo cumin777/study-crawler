@@ -4,3 +4,4 @@ beautifulsoup4>=4.12
 # 可选引擎（图包 / 视频课程），需要时取消注释或单独 pip install
 # gallery-dl
 # yt-dlp
+# imageio-ffmpeg   # yt-dlp 音视频合流用（系统没装 ffmpeg 时的免管理员方案）

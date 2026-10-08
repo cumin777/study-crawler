@@ -18,6 +18,22 @@ from .base import RunSummary
 log = logging.getLogger("crawler")
 
 
+def ffmpeg_args() -> list[str]:
+    """yt-dlp 合流音视频需要 ffmpeg。
+
+    优先用系统的；没有就用 pip 包 imageio-ffmpeg 自带的静态 ffmpeg
+    （免管理员权限安装，Windows 上最省事）。
+    """
+    if shutil.which("ffmpeg"):
+        return []
+    try:
+        import imageio_ffmpeg
+
+        return ["--ffmpeg-location", imageio_ffmpeg.get_ffmpeg_exe()]
+    except Exception:
+        return []
+
+
 class VideoEngine:
     def __init__(self, app):
         self.app = app
@@ -38,6 +54,7 @@ class VideoEngine:
                 "-o", "%(title)s [%(id)s].%(ext)s",
                 "--retries", "10",
                 "--fragment-retries", "10",
+                *ffmpeg_args(),
                 source.url,
             ],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
