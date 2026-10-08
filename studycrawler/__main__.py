@@ -89,6 +89,18 @@ def cmd_watch(args) -> None:
             return
 
 
+def cmd_hunt(args) -> None:
+    from .hunt import Hunt
+
+    cfg = load_config(args.config)
+    app = App(cfg)
+    query = " ".join(args.query)
+    report, results = Hunt(app).run(query, pages=args.pages, top=args.sites)
+    if args.adopt:
+        cfg_path = args.config or PROJECT_ROOT / "config.toml"
+        Hunt(app).adopt(results, Path(cfg_path))
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
         prog="studycrawler", description="学习资料收集爬虫"
@@ -100,12 +112,18 @@ def main(argv=None) -> None:
     sub.add_parser("list", help="列出所有来源")
     p = sub.add_parser("crawl", help="抓取一轮")
     p.add_argument("names", nargs="*", help="要抓的来源名，留空=全部启用的")
-    sub.add_parser("watch", help="常驻增量抓取")
+    p = sub.add_parser("watch", help="常驻增量抓取")
+    p = sub.add_parser("hunt", help="关键词找站：搜索->探测->收割")
+    p.add_argument("query", nargs="+", help="关键词，如: 绘画 AI提效 claude")
+    p.add_argument("--pages", type=int, default=2, help="每个引擎搜几页")
+    p.add_argument("--sites", type=int, default=0, help="最多探测站点数（默认取配置）")
+    p.add_argument("--adopt", action="store_true",
+                   help="把最优站自动转正为 config.toml 里的长期来源")
     args = parser.parse_args(argv)
 
     setup_logging()
-    {"init": cmd_init, "list": cmd_list,
-     "crawl": cmd_crawl, "watch": cmd_watch}[args.command](args)
+    {"init": cmd_init, "list": cmd_list, "crawl": cmd_crawl,
+     "watch": cmd_watch, "hunt": cmd_hunt}[args.command](args)
 
 
 if __name__ == "__main__":

@@ -30,8 +30,9 @@ def unique_path(path: Path) -> Path:
 
 
 def category_dir(settings, category: str) -> Path:
-    """同步目录下的分类子文件夹，如 sync_dir/电子书/。"""
-    d = Path(settings.sync_dir) / safe_filename(category)
+    """同步目录下的分类子文件夹，支持 a/b 形式的多级，如 sync_dir/_hunt/关键词/。"""
+    parts = [safe_filename(p) for p in category.split("/") if p.strip()]
+    d = Path(settings.sync_dir).joinpath(*parts)
     d.mkdir(parents=True, exist_ok=True)
     return d
 

@@ -45,9 +45,24 @@ class Settings:
 
 
 @dataclass
+class HuntSettings:
+    """hunt 关键词找站模式的配置。"""
+
+    engines: list[str] = field(default_factory=lambda: ["bing", "baidu"])
+    custom_engines: list[dict] = field(default_factory=list)  # 任意搜索源
+    max_sites: int = 10           # 每次最多探测的站点数
+    max_files_per_site: int = 5   # 每站最多直接下载的文件数
+    blocklist: list[str] = field(default_factory=lambda: [
+        "zhihu.com", "weibo.com", "tieba.baidu.com",
+        "douyin.com", "baijiahao.baidu.com",
+    ])
+
+
+@dataclass
 class AppConfig:
     settings: Settings
     sources: list[Source]
+    hunt: HuntSettings = field(default_factory=HuntSettings)
 
 
 def _resolve(p: str | Path) -> Path:
@@ -92,7 +107,16 @@ def load_config(path: Path | None = None) -> AppConfig:
             )
         sources.append(src)
 
-    return AppConfig(settings=settings, sources=sources)
+    h = raw.get("hunt", {})
+    hunt = HuntSettings(
+        engines=list(h.get("engines", ["bing", "baidu"])),
+        custom_engines=[dict(e) for e in h.get("engine", [])],
+        max_sites=int(h.get("max_sites", 10)),
+        max_files_per_site=int(h.get("max_files_per_site", 5)),
+        blocklist=list(h.get("blocklist", HuntSettings().blocklist)),
+    )
+
+    return AppConfig(settings=settings, sources=sources, hunt=hunt)
 
 
 DEFAULT_CONFIG_TOML = """\
@@ -111,6 +135,28 @@ request_delay = 2.0
 watch_interval_min = 30
 # HTTP 超时（秒）
 timeout = 20
+
+# ---------- hunt 关键词找站 ----------
+[hunt]
+# 用哪些搜索引擎（bing / baidu / ddg）
+engines = ["bing", "baidu"]
+# 每次最多探测的站点数
+max_sites = 10
+# 每站最多直接下载的文件数（防失控）
+max_files_per_site = 5
+# 探测时跳过这些域名（登录墙/无文件可抓的站）
+blocklist = [
+    "zhihu.com", "weibo.com", "tieba.baidu.com",
+    "douyin.com", "baijiahao.baidu.com",
+]
+
+# 自定义搜索源（可选）：url 里 {query} 换成关键词、{page} 换成页码
+# [[hunt.engine]]
+# name = "我的搜索站"
+# url = "https://example.com/search?q={query}&p={page}"
+# item = "div.result"
+# link = "a"
+# title = "a"
 
 # ---------- 来源 ----------
 # type 四选一：

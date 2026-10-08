@@ -69,6 +69,23 @@ forum 的选择器示例：
 
 选择器写不对就跑一次 `crawl`，看日志报"解析出 0 个条目"再调。
 
+## 关键词找站（hunt 模式）
+
+给一个关键词，爬虫自己去搜、去探、顺手收割：
+
+    python -m studycrawler hunt "AI绘画教程 网盘" --pages 1 --sites 6
+    python -m studycrawler hunt "claude 教程" --adopt    # 最优站自动转正为长期来源
+
+流程：bing/baidu/ddg 搜索 -> 候选站逐个探测打分（关键词命中×2 + 文件直链×3 + 网盘链接×2）-> 高分站限量收割（文件直链直接下、网盘链接进索引）-> `_hunt/` 下出 Markdown 报告，附建议的 source 配置。
+
+实跑经验：
+
+- **关键词要带资源意图**。"绘画 AI提效 claude" 搜出来的是工具站；"AI绘画教程 网盘" 才是找资料的问法。
+- **通用引擎找网盘资源很弱**。真正的威力在 `[[hunt.engine]]` 自定义搜索源——把你信任的网盘搜索站配置进去，hunt 就会拿它当主力引擎。
+- 百度对数据中心/公司 IP 常弹安全验证，属正常降级，bing/ddg 会兜底。
+- 收割有双重门槛（关键词至少命中 1 个 + 总分≥8），探测到关键词不相关但挂满 PDF 的站不会误抓。
+- `--adopt` 只自动转正 video/gallery/pan 类候选；forum 站要人肉配选择器，报告里给了配置块模板。
+
 ## 两种运行方式
 
 - 手动：`python -m studycrawler crawl` 或 `python -m studycrawler crawl 来源名`

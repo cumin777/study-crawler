@@ -15,7 +15,8 @@ from studycrawler.config import Settings  # noqa: E402
 from studycrawler.db import StateDB  # noqa: E402
 from studycrawler.engines.forum import file_links_in_page, parse_list  # noqa: E402
 from studycrawler.engines.linkhub import extract_links  # noqa: E402
-from studycrawler.storage import safe_filename  # noqa: E402
+from studycrawler.hunt import _ddg_real_url, _hits_from_selectors, suggest_type  # noqa: E402
+from studycrawler.storage import category_dir, safe_filename  # noqa: E402
 
 LIST_HTML = """
 <html><body>
@@ -102,6 +103,38 @@ def test_db() -> None:
     print("ok  db.seen/mark")
 
 
+def test_category_dir() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        st = Settings(sync_dir=Path(td), db_path=Path(td) / "s.db")
+        d = category_dir(st, "_hunt/AI绘画: 教程")
+        assert d == Path(td) / "_hunt" / "AI绘画_ 教程", d
+        assert d.is_dir()
+    print("ok  storage.category_dir")
+
+
+def test_hunt_parsers() -> None:
+    bing_html = """
+    <html><body><ol>
+      <li class="b_algo"><h2><a href="https://a.com/1">AI 绘画教程</a></h2></li>
+      <li class="b_algo"><h2><a href="https://b.com/2">Claude 提效</a></h2></li>
+      <li class="b_algo"><h2>没链接</h2></li>
+    </ol></body></html>
+    """
+    hits = _hits_from_selectors(bing_html, "https://cn.bing.com/search",
+                                "li.b_algo", "h2 a", "h2 a")
+    assert len(hits) == 2 and hits[0]["url"] == "https://a.com/1", hits
+
+    # ddg 跳转链接解码
+    real = _ddg_real_url("//duckduckgo.com/l/?uddg=https%3A%2F%2Fa.com%2Fx&rut=1")
+    assert real == "https://a.com/x", real
+    assert _ddg_real_url("https://plain.com/y") == "https://plain.com/y"
+
+    assert suggest_type("https://www.bilibili.com/video/BV1x") == "video"
+    assert suggest_type("https://www.pixiv.net/users/1") == "gallery"
+    assert suggest_type("https://some-forum.com/t/1") == "forum"
+    print("ok  hunt.parsers")
+
+
 def test_online() -> None:
     from studycrawler.fetch import Fetcher
 
@@ -118,6 +151,8 @@ def main() -> None:
     test_file_links()
     test_extract_links()
     test_db()
+    test_category_dir()
+    test_hunt_parsers()
     if "--online" in sys.argv:
         test_online()
     print("\n全部通过")
