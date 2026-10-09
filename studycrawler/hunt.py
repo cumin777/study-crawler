@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from .engines.forum import file_links_in_page
-from .engines.linkhub import extract_links
+from .engines.linkhub import SHARE_PATTERNS, extract_links
 from .engines.video import ffmpeg_args
 from .storage import category_dir, count_files, safe_filename
 
@@ -202,6 +202,97 @@ def search_custom(eng_cfg, query, pages, fetcher):
 
 SEARCHERS = {"bing": search_bing, "baidu": search_baidu, "ddg": search_ddg}
 
+# 通用引擎（会自动追加"关键词+网盘"变体）；网盘搜索引擎不需要
+GENERAL_ENGINES = {"bing", "baidu", "ddg"}
+
+
+def _is_pan_link(url: str) -> bool:
+    return any(p.search(url) for p in SHARE_PATTERNS)
+
+
+# ---------- 网盘搜索引擎（返回的命中本身就是分享链接，成品直达） ----------
+
+def _parse_pansearch_item(content: str, fallback_title: str) -> dict | None:
+    """pansearch 条目的 content 是 HTML 片段：名称 + <a href> + pwd 参数。"""
+    m_href = re.search(r'href="([^"]+)"', content)
+    if not m_href:
+        return None
+    url = m_href.group(1)
+    m_pwd = re.search(r'[?&]pwd=([^"&#]+)', content)
+    m_title = re.search(r"名称：([^<\n]+)", content)
+    title = m_title.group(1).strip() if m_title else fallback_title
+    return {"title": title, "url": url, "code": m_pwd.group(1) if m_pwd else ""}
+
+
+def search_pansearch(query, pages, fetcher):
+    """盘搜 pansearch.me：Next.js 数据接口，先取 buildId 再查询。"""
+    try:
+        html = fetcher.get_text("https://www.pansearch.me/search")
+    except Exception as exc:
+        log.warning("[pansearch] 取 buildId 失败: %r", exc)
+        return []
+    m = re.search(r'"buildId":"([^"]+)"', html)
+    if not m:
+        log.warning("[pansearch] 页面没找到 buildId（站点可能改版）")
+        return []
+    build_id = m.group(1)
+    out = []
+    for p in range(max(1, pages)):
+        url = (
+            f"https://www.pansearch.me/_next/data/{build_id}/search.json"
+            f"?keyword={quote(query)}&offset={p * 10}"
+        )
+        try:
+            data = fetcher.get_json(url)
+        except Exception as exc:
+            log.warning("[pansearch] 第 %d 页失败: %r", p + 1, exc)
+            break
+        items = data.get("pageProps", {}).get("data", {}).get("data") or []
+        for it in items:
+            hit = _parse_pansearch_item(it.get("content", ""), query)
+            if hit:
+                out.append(hit)
+    return out
+
+
+def search_qupansou(query, pages, fetcher):
+    """去盘搜 funletu：一个 POST JSON 接口直接出结果。"""
+    body = {
+        "style": "get",
+        "datasrc": "search",
+        "query": {
+            "id": "", "datetime": "", "courseid": 1, "categoryid": "",
+            "filetypeid": "", "filetype": "", "reportid": "", "validid": "",
+            "searchtext": query,
+        },
+        "page": {"pageSize": 100, "pageIndex": 1},
+        "order": {"prop": "sort", "order": "desc"},
+        "message": "请求资源列表数据",
+    }
+    try:
+        resp = fetcher.post_json(
+            "https://v.funletu.com/search", body,
+            headers={"referer": "https://pan.funletu.com/"},
+        )
+    except Exception as exc:
+        log.warning("[qupansou] 请求失败: %r", exc)
+        return []
+    if resp.get("status") != 200:
+        log.warning("[qupansou] 返回异常 status=%s", resp.get("status"))
+        return []
+    out = []
+    for it in resp.get("data") or []:
+        url = it.get("url") or ""
+        if not url:
+            continue
+        title = re.sub(r"<[^>]+>", "", it.get("title") or "").strip()
+        m_pwd = re.search(r"[?&]pwd=([^&#]+)", url)
+        out.append({"title": title, "url": url, "code": m_pwd.group(1) if m_pwd else ""})
+    return out
+
+
+SEARCHERS.update({"pansearch": search_pansearch, "qupansou": search_qupansou})
+
 
 # ---------- 探测与收割 ----------
 
@@ -227,17 +318,19 @@ class Hunt:
         terms = [t.lower() for t in query.split() if t.strip()]
         log.info("hunt 启动: 关键词=%r, 引擎=%s", query, self.h.engines)
 
-        # 1) 搜索。自动补一个"网盘"意图变体，命中资源页概率更高
-        variants = [query]
-        if not re.search(r"网盘|下载|磁力", query):
-            variants.append(f"{query} 网盘")
-        all_hits: dict[str, dict] = {}
+        # 1) 搜索。通用引擎自动补一个"网盘"意图变体；网盘搜索引擎不需要
+        pan_direct: dict[str, dict] = {}  # url -> hit（成品分享链接，直接进索引）
+        site_hits: dict[str, dict] = {}   # domain -> hit（普通网页，走探测打分）
         for name in self.h.engines:
             fn = SEARCHERS.get(name)
             if fn is None:
                 log.warning("未知搜索引擎: %s (可选: %s)", name, sorted(SEARCHERS))
                 continue
-            for q in variants:
+            if name in GENERAL_ENGINES and not re.search(r"网盘|下载|磁力", query):
+                qs = [query, f"{query} 网盘"]
+            else:
+                qs = [query]
+            for q in qs:
                 try:
                     got = fn(q, pages, self.app.fetcher)
                 except Exception as exc:
@@ -245,17 +338,23 @@ class Hunt:
                     continue
                 log.info("[%s] %r 拿到 %d 条结果", name, q, len(got))
                 for h in got:
-                    domain = urlparse(h["url"]).netloc
-                    if domain and domain not in all_hits:
-                        all_hits[domain] = h
+                    if _is_pan_link(h["url"]):
+                        pan_direct.setdefault(h["url"], h)
+                    else:
+                        domain = urlparse(h["url"]).netloc
+                        if domain:
+                            site_hits.setdefault(domain, h)
         for eng_cfg in self.h.custom_engines:
             for h in search_custom(eng_cfg, query, pages, self.app.fetcher):
-                domain = urlparse(h["url"]).netloc
-                if domain and domain not in all_hits:
-                    all_hits[domain] = h
+                if _is_pan_link(h["url"]):
+                    pan_direct.setdefault(h["url"], h)
+                else:
+                    domain = urlparse(h["url"]).netloc
+                    if domain:
+                        site_hits.setdefault(domain, h)
 
-        candidates = [h for h in all_hits.values() if not self._blocked(h["url"])][:top]
-        log.info("去重+过滤后候选 %d 个站，开始探测", len(candidates))
+        candidates = [h for h in site_hits.values() if not self._blocked(h["url"])][:top]
+        log.info("站点候选 %d 个，直连分享链接 %d 条", len(candidates), len(pan_direct))
 
         # 2) 探测打分
         results = []
@@ -283,7 +382,7 @@ class Hunt:
                      urlparse(r["url"]).netloc, len(pages_seen), len(files), len(pans))
 
         # 关键词本轮已处理（搜索成功即算，即使没收到东西）；搜索全挂则下轮重试
-        if candidates:
+        if candidates or pan_direct:
             mark_query_done(self.app, query)
 
         # 3) 收割 + 4) 报告。out 指定时整套结果落在 out 下，否则在 sync_dir/_hunt
@@ -294,7 +393,12 @@ class Hunt:
             cat.mkdir(parents=True, exist_ok=True)
         else:
             cat = category_dir(self.app.cfg.settings, f"_hunt/{qdir}")
-        n_files, n_pans, pan_index = self._harvest(query, results, cat, files_cap)
+
+        # 3.1) 网盘搜索引擎返回的成品分享链接：不探测，直接进索引
+        n_pans = self._collect_direct(query, pan_direct, cat)
+
+        n_files, n_pans_site, pan_index = self._harvest(query, results, cat, files_cap)
+        n_pans += n_pans_site
 
         # 3.5) video/gallery 候选交给现成引擎收割（限量）
         n_files += self._engine_harvest(query, results, cat, files_cap)
@@ -387,6 +491,33 @@ class Hunt:
                 if promising and href not in visited:
                     frontier.append((href, depth + 1))
         return visited, files, pans
+
+    def _collect_direct(self, query: str, pan_direct: dict, cat: Path) -> int:
+        """网盘搜索引擎直接返回的分享链接：不探测不下载，进索引即交付。"""
+        src_name = f"hunt:{query}"
+        fresh = [
+            h for u, h in pan_direct.items()
+            if not self.app.db.seen(u, src_name)
+        ]
+        if not fresh:
+            return 0
+        index = cat / "分享链接.md"
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        is_new = not index.exists()
+        with open(index, "a", encoding="utf-8") as f:
+            if is_new:
+                f.write(f"# hunt 收集的分享链接: {query}\n\n")
+            for h in fresh:
+                code = f"  提取码 {h['code']}" if h.get("code") else ""
+                title = (h.get("title") or "").strip() or "(无标题)"
+                f.write(f"- {now} | {title[:80]} | {h['url']}{code}\n")
+        for h in fresh:
+            self.app.db.mark(
+                h["url"], src_name, title=h.get("title", ""), status="done",
+                path=str(index),
+            )
+        log.info("[%s] 直连分享链接 %d 条 -> %s", query, len(fresh), index)
+        return len(fresh)
 
     def _engine_harvest(self, query, results, cat: Path, files_cap: int) -> int:
         """video/gallery 候选直接调 yt-dlp / gallery-dl 收割，严格限量。

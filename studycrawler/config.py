@@ -48,7 +48,9 @@ class Settings:
 class HuntSettings:
     """hunt 关键词找站模式的配置。"""
 
-    engines: list[str] = field(default_factory=lambda: ["bing", "baidu"])
+    engines: list[str] = field(default_factory=lambda: [
+        "pansearch", "bing",
+    ])
     custom_engines: list[dict] = field(default_factory=list)  # 任意搜索源
     keywords_file: str = "./keywords.txt"  # watch 模式每轮读取的关键词文件
     max_sites: int = 10           # 每次最多探测的站点数
@@ -110,7 +112,7 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     h = raw.get("hunt", {})
     hunt = HuntSettings(
-        engines=list(h.get("engines", ["bing", "baidu"])),
+        engines=list(h.get("engines", ["pansearch", "bing"])),
         custom_engines=[dict(e) for e in h.get("engine", [])],
         keywords_file=str(h.get("keywords_file", "./keywords.txt")),
         max_sites=int(h.get("max_sites", 10)),
@@ -140,8 +142,11 @@ timeout = 20
 
 # ---------- hunt 关键词找站 ----------
 [hunt]
-# 用哪些搜索引擎（bing / baidu / ddg）
-engines = ["bing", "baidu"]
+# 用哪些搜索引擎。
+# 网盘搜索引擎(主力,返回的分享链接直接进索引)：pansearch / qupansou
+#   注: qupansou 接口 2026-10 观测不稳定(证书问题),要加回自己加
+# 通用引擎(兜底,探测打分,video候选走引擎收割)：bing / baidu / ddg
+engines = ["pansearch", "bing"]
 # watch 模式每轮读取的关键词文件（一行一个关键词，# 注释；新关键词自动 hunt 一次）
 keywords_file = "./keywords.txt"
 # 每次最多探测的站点数

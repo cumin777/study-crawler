@@ -173,6 +173,25 @@ def test_strong_first() -> None:
     print("ok  hunt.strong_first")
 
 
+def test_pan_parsers() -> None:
+    from studycrawler.hunt import _is_pan_link, _parse_pansearch_item
+
+    content = (
+        "名称：<span class='highlight-keyword'>板绘</span>教程合集 "
+        "<a href=\"https://pan.baidu.com/s/1AbCde?pwd=x9k2\">网盘</a>"
+    )
+    hit = _parse_pansearch_item(content, "板绘")
+    assert hit == {
+        "title": "板绘", "url": "https://pan.baidu.com/s/1AbCde?pwd=x9k2", "code": "x9k2",
+    }, hit
+    assert _parse_pansearch_item("没有链接", "x") is None
+
+    assert _is_pan_link("https://pan.baidu.com/s/1AbC")
+    assert _is_pan_link("magnet:?xt=urn:btih:ABC123")
+    assert not _is_pan_link("https://www.bilibili.com/video/BV1x")
+    print("ok  hunt.pan parsers")
+
+
 def test_online() -> None:
     from studycrawler.fetch import Fetcher
 
@@ -193,6 +212,7 @@ def main() -> None:
     test_hunt_parsers()
     test_keywords_queue()
     test_strong_first()
+    test_pan_parsers()
     if "--online" in sys.argv:
         test_online()
     print("\n全部通过")

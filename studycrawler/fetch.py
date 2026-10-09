@@ -57,6 +57,17 @@ class Fetcher:
     def get_text(self, url: str) -> str:
         return self.get(url).text
 
+    def get_json(self, url: str):
+        return self.get(url).json()
+
+    def post_json(self, url: str, body: dict, headers: dict | None = None):
+        self._polite_wait(url)
+        resp = self.session.post(
+            url, json=body, timeout=self.timeout, headers=headers or {}
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def download(self, url: str, dest_dir: Path, fallback_stem: str = "") -> Path:
         """流式下载到 dest_dir；同名且同大小则跳过（视为成功）。
 
