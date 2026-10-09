@@ -192,6 +192,46 @@ def test_pan_parsers() -> None:
     print("ok  hunt.pan parsers")
 
 
+def test_checker() -> None:
+    from studycrawler import checker
+
+    class FF:
+        def get_text(self, url):
+            if "dead" in url:
+                return "<html>分享的文件已经被取消，链接已失效</html>"
+            return "<html>请输入提取码 share</html>"
+
+        def post_json(self, url, body, headers=None, accept=(200,)):
+            if body.get("pwd_id") == "dead1":
+                return {"code": 41012, "message": "好友已取消了分享"}
+            return {"code": 0}
+
+    assert checker.check("https://pan.baidu.com/s/dead1", FF()) == (
+        "dead", "分享的文件已经被取消")
+    assert checker.check("https://pan.baidu.com/s/ok1", FF())[0] == "ok"
+    assert checker.check("https://pan.quark.cn/s/dead1", FF()) == (
+        "dead", "好友已取消了分享")
+    assert checker.check("https://pan.quark.cn/s/ok1", FF())[0] == "ok"
+    assert checker.check("https://www.alipan.com/s/x", FF())[0] == "unknown"
+    assert checker.check("magnet:?xt=urn:btih:A1", FF())[0] == "unknown"
+
+    assert checker.is_checkable("https://pan.baidu.com/s/x")
+    assert checker.is_checkable("https://pan.quark.cn/s/x")
+    assert checker.is_checkable("https://wwm.lanzouq.com/x")
+    assert not checker.is_checkable("https://www.alipan.com/s/x")
+    assert not checker.is_checkable("magnet:?xt=urn:btih:A1")
+
+    line = "- 2026-10-09 10:31 | 板绘 | https://pan.quark.cn/s/abc  提取码 4gk2 [有效]"
+    rec = checker.parse_line(line)
+    assert rec["url"] == "https://pan.quark.cn/s/abc"
+    assert rec["code"] == "4gk2"
+    assert rec["status"] == "有效"
+    assert checker.parse_line("# 标题行") is None
+    assert checker.render_line({**rec, "status": "失效: 已过期"}).endswith(
+        "[失效: 已过期]")
+    print("ok  checker")
+
+
 def test_online() -> None:
     from studycrawler.fetch import Fetcher
 
@@ -213,6 +253,7 @@ def main() -> None:
     test_keywords_queue()
     test_strong_first()
     test_pan_parsers()
+    test_checker()
     if "--online" in sys.argv:
         test_online()
     print("\n全部通过")

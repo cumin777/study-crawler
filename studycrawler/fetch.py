@@ -60,12 +60,16 @@ class Fetcher:
     def get_json(self, url: str):
         return self.get(url).json()
 
-    def post_json(self, url: str, body: dict, headers: dict | None = None):
+    def post_json(self, url: str, body: dict, headers: dict | None = None,
+                  accept: tuple = (200,)):
+        """POST JSON 并解析响应。accept 里的状态码不抛异常——有些 API 用
+        404/400 带 JSON body 表达业务错误（如夸克死链），那种要读 body。"""
         self._polite_wait(url)
         resp = self.session.post(
             url, json=body, timeout=self.timeout, headers=headers or {}
         )
-        resp.raise_for_status()
+        if resp.status_code not in accept:
+            resp.raise_for_status()
         return resp.json()
 
     def download(self, url: str, dest_dir: Path, fallback_stem: str = "") -> Path:

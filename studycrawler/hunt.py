@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
+from .checker import check, is_checkable, status_label
 from .engines.forum import file_links_in_page
 from .engines.linkhub import SHARE_PATTERNS, extract_links
 from .engines.video import ffmpeg_args
@@ -493,31 +494,49 @@ class Hunt:
         return visited, files, pans
 
     def _collect_direct(self, query: str, pan_direct: dict, cat: Path) -> int:
-        """网盘搜索引擎直接返回的分享链接：不探测不下载，进索引即交付。"""
+        """网盘搜索引擎直接返回的分享链接：校验死活，进索引即交付。
+
+        checkable_only 开启时丢弃不可校验的（阿里盘等）；
+        check_links 开启时当场校验，死链直接不写索引。
+        """
         src_name = f"hunt:{query}"
         fresh = [
             h for u, h in pan_direct.items()
             if not self.app.db.seen(u, src_name)
         ]
+        if self.h.checkable_only:
+            dropped = sum(1 for h in fresh if not is_checkable(h["url"]))
+            fresh = [h for h in fresh if is_checkable(h["url"])]
+            if dropped:
+                log.info("[%s] 丢弃 %d 条不可校验链接（阿里盘等）", query, dropped)
         if not fresh:
             return 0
         index = cat / "分享链接.md"
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         is_new = not index.exists()
+        n_kept = 0
         with open(index, "a", encoding="utf-8") as f:
             if is_new:
                 f.write(f"# hunt 收集的分享链接: {query}\n\n")
             for h in fresh:
                 code = f"  提取码 {h['code']}" if h.get("code") else ""
                 title = (h.get("title") or "").strip() or "(无标题)"
-                f.write(f"- {now} | {title[:80]} | {h['url']}{code}\n")
-        for h in fresh:
-            self.app.db.mark(
-                h["url"], src_name, title=h.get("title", ""), status="done",
-                path=str(index),
-            )
-        log.info("[%s] 直连分享链接 %d 条 -> %s", query, len(fresh), index)
-        return len(fresh)
+                label = ""
+                if self.h.check_links:
+                    st, note = check(h["url"], self.app.fetcher)
+                    self.app.db.mark(h["url"], "linkcheck", title=note, status=st)
+                    if st == "dead":
+                        log.info("[%s] 死链不入索引: %s (%s)", query, h["url"][:60], note)
+                        continue
+                    label = f" [{status_label(st, note)}]"
+                f.write(f"- {now} | {title[:80]} | {h['url']}{code}{label}\n")
+                self.app.db.mark(
+                    h["url"], src_name, title=h.get("title", ""),
+                    status="done", path=str(index),
+                )
+                n_kept += 1
+        log.info("[%s] 分享链接入索引 %d 条 -> %s", query, n_kept, index)
+        return n_kept
 
     def _engine_harvest(self, query, results, cat: Path, files_cap: int) -> int:
         """video/gallery 候选直接调 yt-dlp / gallery-dl 收割，严格限量。
@@ -599,6 +618,8 @@ class Hunt:
                         f.write(f"# hunt 收集的分享链接: {query}\n\n")
                     for p in r["pans"]:
                         if self.app.db.seen(p["link"], src_name):
+                            continue
+                        if self.h.checkable_only and not is_checkable(p["link"]):
                             continue
                         code = f"  提取码 {p['code']}" if p["code"] else ""
                         f.write(f"- {now} | {r['title']} | {p['link']}{code}\n")

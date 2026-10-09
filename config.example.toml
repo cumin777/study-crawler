@@ -22,6 +22,10 @@ timeout = 20
 engines = ["pansearch", "bing"]
 # watch 模式每轮读取的关键词文件（一行一个关键词，# 注释；新关键词自动 hunt 一次）
 keywords_file = "./keywords.txt"
+# 采集时立即校验链接死活（约 2 秒/条）
+check_links = true
+# 只收可校验的链接（百度/夸克/蓝奏），阿里等无法判死活的直接丢弃
+checkable_only = true
 # 每次最多探测的站点数
 max_sites = 10
 # 每站最多直接下载的文件数（防失控）

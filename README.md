@@ -95,6 +95,19 @@ forum 的选择器示例：
 - 手动：`python -m studycrawler crawl` 或 `python -m studycrawler crawl 来源名`
 - 定时增量：`python -m studycrawler watch`（间隔在 `watch_interval_min` 配）。挂在后台即可；Windows 开机自启可用任务计划程序，操作为 `python -m studycrawler watch`，起始于本项目目录。
 
+## 分享链接死活校验
+
+死链是网盘分享的常态（实测首日收集的链接约 1/3 已死），两条防线：
+
+1. **采集时当场校验**（`check_links = true` 默认开）：hunt 收到的每条链接先查死活，**死链根本不写入索引**，每条约多花 2 秒
+2. **存量排查**：
+
+        python -m studycrawler check            # 校验所有 分享链接.md，标注 [有效]/[失效: 原因]
+        python -m studycrawler check 板绘       # 只查路径含"板绘"的
+        python -m studycrawler check --recheck  # 已标有效的也重查
+
+只收可校验的链接（`checkable_only = true` 默认开）：夸克（API 判活，连死因都有）/ 百度 / 蓝奏留下，**阿里盘等无法判死的直接丢弃**。各网盘判活方式实测记录在 `studycrawler/checker.py` 头部注释。想连阿里的也要，把 `checkable_only` 改 false，代价是索引里混着无法甄别的死链。
+
 ## 关键词输入模型（日常主力）
 
 三要素：**关键词 / 存储路径 / 文件数**。

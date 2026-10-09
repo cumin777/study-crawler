@@ -53,6 +53,8 @@ class HuntSettings:
     ])
     custom_engines: list[dict] = field(default_factory=list)  # 任意搜索源
     keywords_file: str = "./keywords.txt"  # watch 模式每轮读取的关键词文件
+    check_links: bool = True    # 采集时立即校验链接死活
+    checkable_only: bool = True # 只收可校验的链接(百度/夸克/蓝奏)，丢弃阿里等
     max_sites: int = 10           # 每次最多探测的站点数
     max_files_per_site: int = 5   # 每站最多直接下载的文件数
     blocklist: list[str] = field(default_factory=lambda: [
@@ -115,6 +117,8 @@ def load_config(path: Path | None = None) -> AppConfig:
         engines=list(h.get("engines", ["pansearch", "bing"])),
         custom_engines=[dict(e) for e in h.get("engine", [])],
         keywords_file=str(h.get("keywords_file", "./keywords.txt")),
+        check_links=bool(h.get("check_links", True)),
+        checkable_only=bool(h.get("checkable_only", True)),
         max_sites=int(h.get("max_sites", 10)),
         max_files_per_site=int(h.get("max_files_per_site", 5)),
         blocklist=list(h.get("blocklist", HuntSettings().blocklist)),
@@ -149,6 +153,11 @@ timeout = 20
 engines = ["pansearch", "bing"]
 # watch 模式每轮读取的关键词文件（一行一个关键词，# 注释；新关键词自动 hunt 一次）
 keywords_file = "./keywords.txt"
+# 采集时立即校验链接死活（约 2 秒/条）
+check_links = true
+# 只收可校验的链接（百度/夸克/蓝奏），阿里等无法判死活的直接丢弃。
+# 想全部收集再手动甄别就改 false
+checkable_only = true
 # 每次最多探测的站点数
 max_sites = 10
 # 每站最多直接下载的文件数（防失控）

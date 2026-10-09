@@ -81,6 +81,44 @@ def cmd_hunt(args) -> None:
         Hunt(app).adopt(results, Path(cfg_path))
 
 
+def cmd_check(args) -> None:
+    """校验索引里的分享链接死活，把结果标注进索引文件。"""
+    from .checker import check, parse_line, render_line, status_label
+
+    cfg = load_config(args.config)
+    app = App(cfg)
+    log = logging.getLogger("crawler")
+    sync = Path(cfg.settings.sync_dir)
+    files = sorted(sync.rglob("分享链接.md"))
+    if args.keywords:
+        files = [f for f in files if any(k in str(f) for k in args.keywords)]
+    if not files:
+        log.info("没找到任何 分享链接.md（先跑 hunt 收集）")
+        return
+    for idx in files:
+        lines = idx.read_text(encoding="utf-8").splitlines()
+        out: list[str] = []
+        stats = {"ok": 0, "dead": 0, "unknown": 0}
+        for ln in lines:
+            rec = parse_line(ln)
+            if rec is None:
+                out.append(ln)
+                continue
+            if not args.recheck and (rec["status"] or "").startswith("有效"):
+                stats["ok"] += 1
+                out.append(render_line(rec))
+                continue
+            st, note = check(rec["url"], app.fetcher)
+            rec["status"] = status_label(st, note)
+            stats[st] += 1
+            app.db.mark(rec["url"], "linkcheck", title=note, status=st)
+            out.append(render_line(rec))
+            log.info("%s -> %s", rec["url"][:70], rec["status"])
+        idx.write_text("\n".join(out) + "\n", encoding="utf-8")
+        log.info("[%s] 有效 %d / 失效 %d / 未验证 %d",
+                 idx.relative_to(sync), stats["ok"], stats["dead"], stats["unknown"])
+
+
 def _hunt_pending_keywords(app, kw_path: Path, files_cap: int, top: int, out) -> None:
     """读关键词文件，hunt 掉还没处理过的新关键词。文件被外部更新也能自动接上。"""
     from .hunt import Hunt, query_done, read_keywords
@@ -153,6 +191,10 @@ def main(argv=None) -> None:
     p.add_argument("--adopt", action="store_true",
                    help="把最优站自动转正为 config.toml 里的长期来源")
 
+    p = sub.add_parser("check", help="校验分享链接死活并标注索引")
+    p.add_argument("keywords", nargs="*", help="只校验路径含这些词的索引")
+    p.add_argument("--recheck", action="store_true", help="已标有效的也重查")
+
     p = sub.add_parser("watch", help="常驻增量抓取（sources + 关键词文件）")
     p.add_argument("--keywords", type=Path, default=None,
                    help="关键词文件路径（默认项目根目录 keywords.txt）")
@@ -164,7 +206,7 @@ def main(argv=None) -> None:
 
     setup_logging()
     {"init": cmd_init, "list": cmd_list, "crawl": cmd_crawl,
-     "watch": cmd_watch, "hunt": cmd_hunt}[args.command](args)
+     "watch": cmd_watch, "hunt": cmd_hunt, "check": cmd_check}[args.command](args)
 
 
 if __name__ == "__main__":
