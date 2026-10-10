@@ -1,6 +1,6 @@
 @echo off
 rem Interactive hunt: asks keyword / output dir / file count
-cd /d %~dp0
+cd /d %~dp0..
 set "KW="
 set /p KW=Keyword:
 if "%KW%"=="" (

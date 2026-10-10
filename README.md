@@ -134,13 +134,13 @@ watch 每轮做两件事：跑 config 里的 sources，然后读**关键词文�
 
 ## 双击脚本（Windows）
 
-项目根目录三个 bat，双击即用：
+`scripts\` 下三个 bat，文件名即命令动词，双击即用：
 
-- `找资料.bat` —— 问你三件事（关键词/存储路径/文件数），立即 hunt
-- `抓一轮.bat` —— 跑一次 crawl（全部启用的源）
-- `常驻监控.bat` —— 启动 watch（含关键词文件监控）
+- `scripts\hunt.bat` —— 问你三件事（关键词/存储路径/文件数），立即 hunt
+- `scripts\crawl.bat` —— 跑一次 crawl（全部启用的源）
+- `scripts\watch.bat` —— 启动 watch（含关键词文件监控）
 
-bat 内容是纯 ASCII（避免 cmd 编码坑），交互提示为英文，参数含义同上表。
+bat 文件名与内容纯 ASCII（避免 cmd 编码坑），交互提示为英文，参数含义同上表；脚本自己会切到仓库根再调 `python -m studycrawler`。
 
 去重靠 SQLite（`data/state.db`）：同一 URL 成功处理过就跳过，失败的下轮自动重试。删掉 state.db 就是全量重抓。
 
