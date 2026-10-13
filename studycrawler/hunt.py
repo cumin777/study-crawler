@@ -6,7 +6,7 @@
     python -m studycrawler hunt "xxx" --adopt   # 最优站自动转正为长期 source
 
 流程:
-  1. 搜: bing / baidu / duckduckgo + config 里的自定义搜索源
+  1. 搜: tg / pansearch / qupansou 网盘搜索引擎（直出分享链接）+ bing / baidu / ddg 兜底
   2. 探: 逐个访问候选站，按 关键词命中*2 + 文件直链*3 + 网盘链接*2 打分
   3. 收: 高分站的文件直链限量下载，网盘链接进索引
   4. 报: _hunt/ 下出 Markdown 报告，含排序与建议的 source 配置
@@ -295,6 +295,103 @@ def search_qupansou(query, pages, fetcher):
 SEARCHERS.update({"pansearch": search_pansearch, "qupansou": search_qupansou})
 
 
+# ---------- TG 频道搜索（t.me/s/<频道>?q=<词>，web 预览免登录免代理） ----------
+# 频道清单取自 fish2018/pansou 的 docker-compose CHANNELS，2026-10-13 逐个实测筛过：
+# 高频词(考研)主力 = 综合资源频道；冷门考证词(注册电气工程师)只有学习向频道有货。
+
+TG_DEFAULT_CHANNELS = [
+    # 学习资料向（冷门词救命频道）
+    "xuexiziliaobaibaoku",  # 学习资料百科库
+    "baicaoZY",
+    "xxzlzn",
+    # 综合资源向（高频词主力）
+    "BooksRealm", "shareAliyun", "wpzyk", "wpan8",
+    "yunpanx", "leoziyuan", "gotopan", "gokuapan", "seedhub_pro",
+]
+
+TG_PAN_RE = re.compile(
+    r"https?://pan\.quark\.cn/s/[0-9a-zA-Z]+"
+    r"|https?://pan\.baidu\.com/s/[-0-9a-zA-Z_]+"
+    r"|https?://(?:www\.)?(?:alipan|aliyundrive)\.com/s/[0-9a-zA-Z_-]+"
+    r"|https?://pan\.xunlei\.com/s/[0-9a-zA-Z_-]+"
+    r"|https?://cloud\.189\.cn/t/[0-9a-zA-Z_-]+"
+    r"|https?://(?:www\.)?123pan\.com/s/[0-9a-zA-Z_-]+"
+    r"|https?://pan\.lanzou[a-z]?\.com/[0-9a-zA-Z]+"
+    r"|https?://drive\.uc\.cn/s/[0-9a-fA-F]+"
+)
+
+# 提取码写法：URL 自带 pwd= / 中文标签 / 单独一个"码"字
+TG_PWD_PATTERNS = [
+    re.compile(r"[?&]pwd=([0-9a-zA-Z]{4,8})"),
+    re.compile(r"(?:提取码|提取碼|密码|密碼|访问码|訪問碼)[^\da-zA-Z]{0,3}([0-9a-zA-Z]{4,8})"),
+    re.compile(r"(?:^|\s)码[:：\s]+([0-9a-zA-Z]{4,8})"),
+]
+
+
+def _tg_pwd_near(text: str, url: str) -> str:
+    """链接后 60 字符窗口内找提取码；窗口遇下一条链接截断，多链接消息不串码。
+
+    提取码配对思路移植自 pansou 的 passwordFor（链接锚定取窗口），
+    否则一条消息列多个盘各带各的码时，所有链接都会拿到第一个码。
+    """
+    m_in_url = TG_PWD_PATTERNS[0].search(url)
+    if m_in_url:
+        return m_in_url.group(1)
+    pos = text.find(url)
+    if pos < 0:
+        return ""
+    window = text[pos + len(url): pos + len(url) + 60]
+    cut = window.find("http")
+    if cut >= 0:
+        window = window[:cut]
+    for pat in TG_PWD_PATTERNS:
+        m = pat.search(window)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _parse_tg_html(html: str, channel: str, query: str) -> list[dict]:
+    """t.me/s/<频道>?q= 预览页 -> [{title,url,code}]。按 URL 去重，带码的候选优先留。"""
+    soup = BeautifulSoup(html, "html.parser")
+    out: dict[str, dict] = {}
+    for msg in soup.select(".tgme_widget_message"):
+        text_el = msg.select_one(".tgme_widget_message_text")
+        if text_el is None:
+            continue
+        text = text_el.get_text("\n", strip=True)
+        # 资源名习惯写在消息第一行
+        first = text.splitlines()[0].strip() if text.splitlines() else ""
+        title = first[:80] or query
+        for url in TG_PAN_RE.findall(text):
+            code = _tg_pwd_near(text, url)
+            prev = out.get(url)
+            if prev is None or (code and not prev.get("code")):
+                out[url] = {"title": f"{title}｜tg:{channel}", "url": url, "code": code}
+    return list(out.values())
+
+
+def search_tg(query: str, pages: int, fetcher,
+              channels: list[str] | None = None) -> list[dict]:
+    """TG 频道 web 预览搜索。频道内搜索自带相关性排序，首页 ~20 条足够，不翻页。"""
+    out = []
+    for ch in channels if channels is not None else TG_DEFAULT_CHANNELS:
+        url = f"https://t.me/s/{ch}?q={quote(query)}"
+        try:
+            html = fetcher.get_text(url)
+        except Exception as exc:
+            log.warning("[tg:%s] 拉取失败: %r", ch, exc)
+            continue
+        hits = _parse_tg_html(html, ch, query)
+        if hits:
+            log.info("[tg:%s] %d 条分享链接", ch, len(hits))
+        out += hits
+    return out
+
+
+SEARCHERS.update({"tg": search_tg})
+
+
 # ---------- 探测与收割 ----------
 
 class Hunt:
@@ -333,7 +430,11 @@ class Hunt:
                 qs = [query]
             for q in qs:
                 try:
-                    got = fn(q, pages, self.app.fetcher)
+                    if name == "tg":
+                        got = fn(q, pages, self.app.fetcher,
+                                 channels=self.h.tg_channels or None)
+                    else:
+                        got = fn(q, pages, self.app.fetcher)
                 except Exception as exc:
                     log.warning("[%s] 搜索异常: %r", name, exc)
                     continue

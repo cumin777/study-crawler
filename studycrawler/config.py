@@ -57,6 +57,7 @@ class HuntSettings:
     checkable_only: bool = True # 只收可校验的链接(百度/夸克/蓝奏)，丢弃阿里等
     max_sites: int = 10           # 每次最多探测的站点数
     max_files_per_site: int = 5   # 每站最多直接下载的文件数
+    tg_channels: list[str] = field(default_factory=list)  # tg 引擎频道清单（空=用内置精选）
     blocklist: list[str] = field(default_factory=lambda: [
         "zhihu.com", "weibo.com", "tieba.baidu.com",
         "douyin.com", "baijiahao.baidu.com",
@@ -121,6 +122,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         checkable_only=bool(h.get("checkable_only", True)),
         max_sites=int(h.get("max_sites", 10)),
         max_files_per_site=int(h.get("max_files_per_site", 5)),
+        tg_channels=[str(c) for c in h.get("tg_channels", [])],
         blocklist=list(h.get("blocklist", HuntSettings().blocklist)),
     )
 
@@ -147,10 +149,15 @@ timeout = 20
 # ---------- hunt 关键词找站 ----------
 [hunt]
 # 用哪些搜索引擎。
-# 网盘搜索引擎(主力,返回的分享链接直接进索引)：pansearch / qupansou
-#   注: qupansou 接口 2026-10 观测不稳定(证书问题),要加回自己加
+# 网盘搜索引擎(主力,返回的分享链接直接进索引)：
+#   tg        = TG 资源频道 web 预览搜索(t.me/s/<频道>?q=)，免登录免代理，频道清单见 tg_channels
+#   pansearch = 盘搜 pansearch.me
+#   qupansou  = 去盘搜(2026-10 实测接口已死,证书+404,留代码不推荐启用)
 # 通用引擎(兜底,探测打分,video候选走引擎收割)：bing / baidu / ddg
-engines = ["pansearch", "bing"]
+engines = ["pansearch", "tg"]
+# tg 引擎的频道清单（不配或留空 = 内置精选 12 个：学习资料向 + 综合资源向）。
+# 频道名抄自 fish2018/pansou 的 docker-compose CHANNELS，接入前先实测筛一遍。
+# tg_channels = ["xuexiziliaobaibaiku", "BooksRealm", "shareAliyun"]
 # watch 模式每轮读取的关键词文件（一行一个关键词，# 注释；新关键词自动 hunt 一次）
 keywords_file = "./keywords.txt"
 # 采集时立即校验链接死活（约 2 秒/条）
