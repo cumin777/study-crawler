@@ -58,6 +58,7 @@ class HuntSettings:
     max_sites: int = 10           # 每次最多探测的站点数
     max_files_per_site: int = 5   # 每站最多直接下载的文件数
     tg_channels: list[str] = field(default_factory=list)  # tg 引擎频道清单（空=用内置精选）
+    junk_words: list[str] = field(default_factory=list)   # 导流陷阱标题词（追加在内置清单后）
     blocklist: list[str] = field(default_factory=lambda: [
         "zhihu.com", "weibo.com", "tieba.baidu.com",
         "douyin.com", "baijiahao.baidu.com",
@@ -123,6 +124,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         max_sites=int(h.get("max_sites", 10)),
         max_files_per_site=int(h.get("max_files_per_site", 5)),
         tg_channels=[str(c) for c in h.get("tg_channels", [])],
+        junk_words=[str(w) for w in h.get("junk_words", [])],
         blocklist=list(h.get("blocklist", HuntSettings().blocklist)),
     )
 
@@ -157,7 +159,9 @@ timeout = 20
 engines = ["pansearch", "tg"]
 # tg 引擎的频道清单（不配或留空 = 内置精选 12 个：学习资料向 + 综合资源向）。
 # 频道名抄自 fish2018/pansou 的 docker-compose CHANNELS，接入前先实测筛一遍。
-# tg_channels = ["xuexiziliaobaibaiku", "BooksRealm", "shareAliyun"]
+# tg_channels = ["xuexiziliaobaibaoku", "BooksRealm", "shareAliyun"]
+# 导流陷阱标题词（在内置清单上加词；标题命中即不入索引）
+# junk_words = ["内部渠道", "粉丝专属"]
 # watch 模式每轮读取的关键词文件（一行一个关键词，# 注释；新关键词自动 hunt 一次）
 keywords_file = "./keywords.txt"
 # 采集时立即校验链接死活（约 2 秒/条）

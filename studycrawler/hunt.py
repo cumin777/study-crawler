@@ -55,6 +55,21 @@ DEEP_HINT = re.compile(
 # 预览图类后缀：收割时排后面，防止拿示例图凑数
 WEAK_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}
 
+# 导流陷阱标题特征（PLAN #12 品质过滤）：这类"资料"帖的真链接要加微信/找客服拿，
+# 标题即自供。命中即弃——restock 选链侧同用此函数（belt + suspenders）。
+JUNK_TITLE_WORDS = [
+    "加微信", "微信号", "加V", "威信", "客服", "引流", "扫码", "二维码",
+    "私信", "公众号", "付费解锁", "解锁",
+]
+
+
+def is_junk_title(title: str, extra: list[str] | None = None) -> bool:
+    """标题命中导流陷阱词即判垃圾（extra 追加调用方在 config 里配的词）。"""
+    for w in JUNK_TITLE_WORDS + list(extra or []):
+        if w and w in title:
+            return True
+    return False
+
 
 def _strong_first(urls: list[str]) -> list[str]:
     """压缩包/笔刷/文档等强类型排前面，预览图排后面。"""
@@ -605,6 +620,16 @@ class Hunt:
             h for u, h in pan_direct.items()
             if not self.app.db.seen(u, src_name)
         ]
+        n_junk = 0
+        kept = []
+        for h in fresh:
+            if is_junk_title(h.get("title") or "", self.h.junk_words):
+                n_junk += 1
+            else:
+                kept.append(h)
+        if n_junk:
+            log.info("[%s] 弃 %d 条导流陷阱链接（加微信/客服类）", query, n_junk)
+        fresh = kept
         if self.h.checkable_only:
             dropped = sum(1 for h in fresh if not is_checkable(h["url"]))
             fresh = [h for h in fresh if is_checkable(h["url"])]
